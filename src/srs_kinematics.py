@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from IPython import embed
+import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
 
@@ -101,7 +102,7 @@ class SRSKinematics:
                                 self.params.mdh[i][3] + q)
         return T
 
-    def get_ik(self, pose, cfg: Config, qpos_seed) -> tuple[KineStatus, np.ndarray]:
+    def get_ik(self, pose, cfg: Config, qpos_seed, verbose=True) -> tuple[KineStatus, np.ndarray]:
         s_psi = np.sin(cfg.arm_angle)
         c_psi = np.cos(cfg.arm_angle)
 
@@ -172,7 +173,7 @@ class SRSKinematics:
 
         qpos = np.array([q1, q2, q3, q4, q5, q6, q7])
         # Check qpos limits
-        if not self._check_qps_limits(qpos):
+        if not self._check_qps_limits(qpos, verbose):
             return KineStatus.OUT_OF_JOINT_LIMITS, qpos
         return KineStatus.OK, qpos
 
@@ -227,7 +228,7 @@ class SRSKinematics:
         psi = sign * safe_acos(uv_ref_plane @ uv_plane)
         return KineStatus.OK, psi
 
-    def calc_feasible_arm_angle_intervals(self, pose, cfg: Config) -> tuple[KineStatus, Intervals]:
+    def calc_feasible_arm_angle_intervals(self, pose, cfg: Config, debug=False) -> tuple[KineStatus, Intervals]:
         p_d = pose[:3,3]
         R_d = pose[:3,:3]
         v_0_sw = p_d - self.v_0_bs - R_d @ self.v_6_wt
@@ -261,7 +262,7 @@ class SRSKinematics:
         Bw = R34.T @ Bs.T @ R_d
         Cw = R34.T @ Cs.T @ R_d
 
-        return KineStatus.OK, self._calc_feasible_arm_angle_intervals(As, Bs, Cs, Aw, Bw, Cw, cfg)
+        return KineStatus.OK, self._calc_feasible_arm_angle_intervals(As, Bs, Cs, Aw, Bw, Cw, cfg, debug)
 
 
     def get_all_ik(self, pose, cfg: Config, qpos_seed):
@@ -270,15 +271,16 @@ class SRSKinematics:
     def get_nearest_ik(self, pose, qpos_seed):
         pass
 
-    def _check_qps_limits(self, qpos) -> bool:
+    def _check_qps_limits(self, qpos, verbose=True) -> bool:
         lower_violate = qpos < (self.params.lb - K_EPS)
         upper_violate = qpos > (self.params.ub + K_EPS)
 
         if np.any(lower_violate) or np.any(upper_violate):
             idxs = np.where(lower_violate | upper_violate)[0]
             for idx in idxs:
-                print(f"q{idx+1} {qpos[idx]} out of limit," + 
-                      f"lb:{self.params.lb[idx]}, ub:{self.params.ub[idx]})")
+                if verbose:
+                    print(f"q{idx+1} {qpos[idx]} out of limit," + 
+                        f"lb:{self.params.lb[idx]}, ub:{self.params.ub[idx]})")
             return False    
         return True        
 
@@ -348,7 +350,7 @@ class SRSKinematics:
         
         return q5, q6, q7
 
-    def _calc_feasible_arm_angle_intervals(self, As, Bs, Cs, Aw, Bw, Cw, cfg: Config) -> Intervals:
+    def _calc_feasible_arm_angle_intervals(self, As, Bs, Cs, Aw, Bw, Cw, cfg: Config, debug=False) -> Intervals:
         q1_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(As[1,2], Bs[1,2], Cs[1,2],
                                                                        As[0,2], Bs[0,2], Cs[0,2],
                                                                        self.params.lb[0], self.params.ub[0], 
@@ -361,7 +363,7 @@ class SRSKinematics:
                                                                        self.params.lb[2], self.params.ub[2], 
                                                                        cfg.shoulder) 
         q5_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(Aw[2,2], Bw[2,2], Cw[2,2],
-                                                                       Aw[2,0], Bw[2,0], Cw[2,0],
+                                                                       Aw[0,2], Bw[0,2], Cw[0,2],
                                                                        self.params.lb[4], self.params.ub[4], 
                                                                        cfg.wrist) 
         q6_psi_intervals = self._calc_cos_feasible_arm_angle_intervals(-Aw[1,2], -Bw[1,2], -Cw[1,2],
@@ -373,6 +375,38 @@ class SRSKinematics:
                                                                        cfg.wrist) 
         psi_intervals = q1_psi_intervals & q2_psi_intervals & q3_psi_intervals & \
                         q5_psi_intervals & q6_psi_intervals & q7_psi_intervals
+        
+        if debug:
+            print("q1_psi_intervals:", q1_psi_intervals)
+            print("q2_psi_intervals:", q2_psi_intervals)
+            print("q3_psi_intervals:", q3_psi_intervals)
+            print("q5_psi_intervals:", q5_psi_intervals)
+            print("q6_psi_intervals:", q6_psi_intervals)
+            print("q7_psi_intervals:", q7_psi_intervals)
+            print("psi_intervals:", psi_intervals)
+
+            psi_list = np.linspace(-np.pi, np.pi, 100).tolist()
+            functions = [("q1", [self._calc_tan_joint(As[1,2], Bs[1,2], Cs[1,2], As[0,2], Bs[0,2], Cs[0,2], psi, cfg.shoulder) for psi in psi_list], self.params.lb[0], self.params.ub[0]),
+                        ("q2", [self._calc_cos_joint(As[2,2], Bs[2,2], Cs[2,2], psi, cfg.shoulder) for psi in psi_list], self.params.lb[1], self.params.ub[1]),
+                        ("q3", [self._calc_tan_joint(As[2,1], Bs[2,1], Cs[2,1], -As[2,0], -Bs[2,0], -Cs[2,0], psi, cfg.shoulder) for psi in psi_list], self.params.lb[2], self.params.ub[2]),
+                        ("q5", [self._calc_tan_joint(Aw[2,2], Bw[2,2], Cw[2,2], Aw[0,2], Bw[0,2], Cw[0,2], psi, cfg.wrist) for psi in psi_list], self.params.lb[4], self.params.ub[4]),
+                        ("q6", [self._calc_cos_joint(-Aw[1,2], -Bw[1,2], -Cw[1,2], psi, cfg.wrist) for psi in psi_list], self.params.lb[5], self.params.ub[5]),
+                        ("q7", [self._calc_tan_joint(-Aw[1,1], -Bw[1,1], -Cw[1,1], Aw[1,0], Bw[1,0], Cw[1,0], psi, cfg.wrist) for psi in psi_list], self.params.lb[6], self.params.ub[6])]
+            
+            fig, axes = plt.subplots(2, 3, figsize=(12, 6))
+            fig.suptitle(f"{cfg}")
+            axes = axes.flatten()
+            for i, (title, q_list, q_lb, q_ub) in enumerate(functions):
+                axes[i].plot(psi_list, q_list)
+                axes[i].axhline(q_lb, linestyle="--", color="gray")
+                axes[i].axhline(q_ub, linestyle="--", color="gray")
+                axes[i].set_title(title)
+                axes[i].set_xlabel("psi (rad)")
+                axes[i].set_ylabel("q (rad)")
+                axes[i].grid(True)
+            plt.tight_layout()
+            plt.show()
+
         return psi_intervals
 
     def _calc_cos_joint(self, a, b, c, psi, cfg: float):
@@ -415,7 +449,7 @@ class SRSKinematics:
         if res2[0] == SolutionStatus.FINITE:
             split_points.extend(res2[1])
 
-        def verif_func(self, psi):
+        def verif_func(psi):
             q = self._calc_cos_joint(a, b, c, psi, cfg)
             return lb - K_EPS <= q <= ub + K_EPS
 

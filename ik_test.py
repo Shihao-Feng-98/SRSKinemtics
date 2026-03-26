@@ -31,10 +31,11 @@ def test_general_ik(kine, n: int = 1e4) -> bool:
     qpos_sample_array = np.random.uniform(kine.params.lb, 
                                           kine.params.ub, 
                                           (int(n), 7))
-    for qpos_seed in qpos_sample_array:
+    for i, qpos_seed in enumerate(qpos_sample_array):
         if not test_ik(kine, qpos_seed):
             return False
-        
+        if i % 1000 == 0:
+            print(f"Checked {i} samples...")
     print("Finish check general ik finished...")
     return True
 
@@ -44,13 +45,14 @@ def test_shoulder_singular(kine, n: int = 1e3) -> bool:
     qpos_sample_array = np.random.uniform(kine.params.lb, 
                                           kine.params.ub, 
                                           (int(n), 7))
-    for qpos_seed in qpos_sample_array:
+    for i, qpos_seed in enumerate(qpos_sample_array):
         if abs(qpos_seed[3]) < K_EPS:
             return True
         qpos_seed[1] = np.sign(qpos_seed[1]) * K_EPS_SMALL
         if not test_ik(kine, qpos_seed):
             return False
-        
+        if i % 100 == 0:
+            print(f"Checked {i} samples...")
     print("Finish check shoulder singular ik...")
     return True
 
@@ -60,7 +62,7 @@ def test_elbow_singular(kine, n: int = 1e3) -> bool:
     qpos_sample_array = np.random.uniform(kine.params.lb, 
                                           kine.params.ub, 
                                           (int(n), 7))
-    for qpos_seed in qpos_sample_array:
+    for i, qpos_seed in enumerate(qpos_sample_array):
         if abs(qpos_seed[1]) < K_EPS:
             return True
         if abs(qpos_seed[5]) < K_EPS:
@@ -68,7 +70,8 @@ def test_elbow_singular(kine, n: int = 1e3) -> bool:
         qpos_seed[3] = np.sign(qpos_seed[3]) * K_EPS_SMALL
         if not test_ik(kine, qpos_seed):
             return False
-        
+        if i % 100 == 0:
+            print(f"Checked {i} samples...")
     print("Finish check elbow singular ik...")
     return True
 
@@ -78,20 +81,21 @@ def test_wrist_singular(kine, n: int = 1e3) -> bool:
     qpos_sample_array = np.random.uniform(kine.params.lb, 
                                           kine.params.ub, 
                                           (int(n), 7))
-    for qpos_seed in qpos_sample_array:
+    for i, qpos_seed in enumerate(qpos_sample_array):
         if abs(qpos_seed[3]) < K_EPS:
             return True
         qpos_seed[5] = np.sign(qpos_seed[5]) * K_EPS_SMALL
         if not test_ik(kine, qpos_seed):
             return False
-        
+        if i % 100 == 0:
+            print(f"Checked {i} samples...")
     print("Finish check wrist singular ik...")
     return True
 
-def _test_feasible_arm_angle(kine, qpos_seed) -> bool:
+def _test_feasible_arm_angle(kine, qpos_seed, debug=False) -> bool:
     pose = kine.get_fk(qpos_seed)
     srs_cfg = SRSKinematics.Config.from_qpos(qpos_seed)
-    res, psi_intervals = kine.calc_feasible_arm_angle_intervals(pose, srs_cfg)
+    res, psi_intervals = kine.calc_feasible_arm_angle_intervals(pose, srs_cfg, debug)
     if res != KineStatus.OK:
         print(f"Calc feasible arm angle intervals failed! qpos_seed: {qpos_seed}")
         return False
@@ -104,10 +108,10 @@ def _test_feasible_arm_angle(kine, qpos_seed) -> bool:
     for interval in psi_intervals.intervals:
         step = 0.05
         if interval.length() < step:
-            valid_psi_list.extend(interval.sample_uniform_by_num(5))
+            valid_psi_list.extend(interval.sample_uniform_by_n(5, False))
         else: 
-            valid_psi_list.extend(interval.sample_uniform_by_step(step))
-    # check true
+            valid_psi_list.extend(interval.sample_uniform_by_step(step, False))
+    # check trues
     for psi in valid_psi_list:
         srs_cfg.arm_angle = psi
         res_ik, qpos = kine.get_ik(pose, srs_cfg, qpos_seed)
@@ -124,28 +128,28 @@ def _test_feasible_arm_angle(kine, qpos_seed) -> bool:
     invalid_psi_list = []
     psi_intervals2 = psi_intervals.complement(Interval(-np.pi, np.pi))
     for interval in psi_intervals2.intervals:
-        step = 0.05
+        step = 0.1
         if interval.length() < step:
-            invalid_psi_list.extend(interval.sample_uniform_by_num(5))
+            invalid_psi_list.extend(interval.sample_uniform_by_n(4, False))
         else: 
-            invalid_psi_list.extend(interval.sample_uniform_by_step(step))
+            invalid_psi_list.extend(interval.sample_uniform_by_step(step, False))
     # check false
     for psi in invalid_psi_list:
         srs_cfg.arm_angle = psi
-        res_ik, qpos = kine.get_ik(pose, srs_cfg, qpos_seed)
+        res_ik, qpos = kine.get_ik(pose, srs_cfg, qpos_seed, verbose=False)
         if res_ik == KineStatus.OK:
             print(f"IK should fail but success! qpos_seed: {qpos_seed}, psi: {psi}")
             embed(banner1="138")
             return False
     return True
 
-def test_feasible_arm_angle(kine, n: int = 1e4):
+def test_feasible_arm_angle(kine, n: int = 1e3):
     print("Start check feasible arm angle...")
     
     qpos_sample_array = np.random.uniform(kine.params.lb, 
                                           kine.params.ub, 
                                           (int(n), 7))
-    for qpos_seed in qpos_sample_array:
+    for i, qpos_seed in enumerate(qpos_sample_array):
         if abs(qpos_seed[1]) < K_EPS:
             continue
         if abs(qpos_seed[3]) < K_EPS:
@@ -154,6 +158,8 @@ def test_feasible_arm_angle(kine, n: int = 1e4):
             continue
         if not _test_feasible_arm_angle(kine, qpos_seed):
             return False
+        if i % 100 == 0:
+            print(f"Checked {i} samples...")
     print("Finish check feasible arm angle...")
     return True
 
@@ -169,5 +175,4 @@ if __name__ == "__main__":
     # test_wrist_singular(iiwa_kine)
     # test_feasible_arm_angle(iiwa_kine)
 
-    qpos_seed = np.array([-0.083497, -0.161657, -1.283097,  0.710541,  0.04491,   0.530829, -1.564985])
-    _test_feasible_arm_angle(iiwa_kine, qpos_seed)
+    test_feasible_arm_angle(iiwa_kine, 10000)

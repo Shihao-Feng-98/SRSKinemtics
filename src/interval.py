@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
-from .utils import K_EPS_SMALL
+from .utils import K_EPS
 
 @dataclass
 class Interval:
@@ -23,19 +23,19 @@ class Interval:
     def contains(self, x: float) -> bool:
         if self.is_empty():
             return False
-        return self.lb - K_EPS_SMALL <= x <= self.ub + K_EPS_SMALL
+        return self.lb - K_EPS <= x <= self.ub + K_EPS
 
     def contains_interval(self, other: "Interval") -> bool:
         if self.is_empty() or other.is_empty():
             return False
-        return (self.lb <= other.lb + K_EPS_SMALL and
-                self.ub >= other.ub - K_EPS_SMALL)
+        return (self.lb <= other.lb + K_EPS and
+                self.ub >= other.ub - K_EPS)
 
     def overlaps(self, other: "Interval") -> bool:
         if self.is_empty() or other.is_empty():
             return False
-        return not (self.ub + K_EPS_SMALL < other.lb or
-                    other.ub + K_EPS_SMALL < self.lb)
+        return not (self.ub + K_EPS < other.lb or
+                    other.ub + K_EPS < self.lb)
 
     def intersect(self, other: "Interval") -> "Interval":
         if self.is_empty() or other.is_empty():
@@ -64,12 +64,12 @@ class Interval:
         x = self.lb
 
         if include_endpoints:
-            while x <= self.ub + K_EPS_SMALL:
+            while x <= self.ub + K_EPS:
                 samples.append(x)
                 x += step
         else:
             x += step
-            while x < self.ub - K_EPS_SMALL:
+            while x < self.ub - K_EPS:
                 samples.append(x)
                 x += step
 
@@ -101,7 +101,7 @@ class Intervals:
         merged = [valid_intervals[0]]
         for current in valid_intervals[1:]:
             last = merged[-1]
-            if current.lb <= last.ub + K_EPS_SMALL:
+            if current.lb <= last.ub + K_EPS:
                 last.ub = max(last.ub, current.ub)
             else:
                 merged.append(Interval(current.lb, current.ub))
@@ -144,7 +144,7 @@ class Intervals:
             if not intersection.is_empty():
                 result.append(intersection)
 
-            if left.ub < right.ub - K_EPS_SMALL:
+            if left.ub < right.ub - K_EPS:
                 i += 1
             else:
                 j += 1
@@ -171,28 +171,28 @@ class Intervals:
         for current in self.intervals:
             start = current.lb
 
-            while j < len(other_intervals) and other_intervals[j].ub < current.lb - K_EPS_SMALL:
+            while j < len(other_intervals) and other_intervals[j].ub < current.lb - K_EPS:
                 j += 1
 
             k = j
-            while k < len(other_intervals) and other_intervals[k].lb <= current.ub + K_EPS_SMALL:
+            while k < len(other_intervals) and other_intervals[k].lb <= current.ub + K_EPS:
                 blocker = other_intervals[k]
 
-                if blocker.lb > start + K_EPS_SMALL:
-                    result.append(Interval(start, min(blocker.lb - K_EPS_SMALL, current.ub)))
+                if blocker.lb > start + K_EPS:
+                    result.append(Interval(start, min(blocker.lb - K_EPS, current.ub)))
 
-                if blocker.ub >= current.ub - K_EPS_SMALL:
+                if blocker.ub >= current.ub - K_EPS:
                     start = current.ub
                     break
 
-                start = max(start, blocker.ub + K_EPS_SMALL)
+                start = max(start, blocker.ub + K_EPS)
                 k += 1
             else:
-                if start <= current.ub + K_EPS_SMALL:
+                if start <= current.ub + K_EPS:
                     result.append(Interval(start, current.ub))
                 continue
 
-            if start < current.ub - K_EPS_SMALL:
+            if start < current.ub - K_EPS:
                 result.append(Interval(start, current.ub))
 
         return Intervals(result)
