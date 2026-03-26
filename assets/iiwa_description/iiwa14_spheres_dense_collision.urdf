@@ -620,11 +620,11 @@
   </joint>
   <link name="iiwa_link_ee_kuka">
     </link>
-  <joint name="tool0_joint" type="fixed">
+  <!-- <joint name="tool0_joint" type="fixed">
     <parent link="iiwa_link_7"/>
     <child link="iiwa_link_ee"/>
     <origin rpy="0 -1.570796326794897 0" xyz="0 0 0.045"/>
   </joint>
   <link name="iiwa_link_ee">
-    </link>
+    </link> -->
 </robot>

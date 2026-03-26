@@ -100,9 +100,12 @@ class SRSKinematics:
                                 self.params.mdh[i][1],
                                 self.params.mdh[i][2],
                                 self.params.mdh[i][3] + q)
+        T = self.T_b_0b @ T @ self.T_oe_e
         return T
 
     def get_ik(self, pose, cfg: Config, qpos_seed, verbose=True) -> tuple[KineStatus, np.ndarray]:
+        pose = np.linalg.inv(self.T_b_0b) @ pose @ np.linalg.inv(self.T_oe_e)
+        
         s_psi = np.sin(cfg.arm_angle)
         c_psi = np.cos(cfg.arm_angle)
 
@@ -229,6 +232,8 @@ class SRSKinematics:
         return KineStatus.OK, psi
 
     def calc_feasible_arm_angle_intervals(self, pose, cfg: Config, debug=False) -> tuple[KineStatus, Intervals]:
+        pose = np.linalg.inv(self.T_b_0b) @ pose @ np.linalg.inv(self.T_oe_e)
+
         p_d = pose[:3,3]
         R_d = pose[:3,:3]
         v_0_sw = p_d - self.v_0_bs - R_d @ self.v_6_wt
