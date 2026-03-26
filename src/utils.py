@@ -35,7 +35,7 @@ def wrap_to_pi(q):
     return q - 2*np.pi
 
 def safe_sqrt(x):
-    return np.sqrt(np.max(x, 0.0))
+    return np.sqrt(max(x, 0.0))
 
 def safe_acos(x):
     return np.arccos(np.clip(x, -1.0, 1.0))
@@ -63,7 +63,7 @@ def solve_sin_cos_eq(a, b, c) -> tuple[SolutionStatus, list]:
             return SolutionStatus.INFINITE, []
         return SolutionStatus.NONE, []
 
-    phi = np.atan2(a, b)
+    phi = np.arctan2(a, b)
     val = -c / r
 
     if val > 1.0 + K_EPS_SMALL or val < -1.0 - K_EPS_SMALL:

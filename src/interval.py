@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
-from utils import K_EPS_SMALL
+from .utils import K_EPS_SMALL
 
 @dataclass
 class Interval:

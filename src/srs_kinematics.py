@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from IPython import embed
 import numpy as np
 from enum import Enum
 
-from utils import *
-from interval import *
+from .utils import *
+from .interval import *
 
 
 class KineStatus(Enum):
@@ -57,23 +58,27 @@ class iiwa14(SRSParams):
 
 
 class SRSKinematics:
+
     class Config:
         @staticmethod
         def from_qpos(qpos, arm_angle=0.):
             return SRSKinematics.Config(qpos[1], qpos[3], qpos[5], arm_angle)
 
-        def __int__(self, shoulder, elbow, wrist, arm_angle=0.):
+        def __init__(self, shoulder, elbow, wrist, arm_angle=0.):
             self.shoulder = np.sign(shoulder)
             self.elbow = np.sign(elbow)
             self.wrist = np.sign(wrist)
             self.arm_angle = wrap_to_pi(arm_angle)
 
-    def __int__(self, srs_params: SRSParams = iiwa14()):
+        def __repr__(self):
+            return f"Config(shoulder={self.shoulder}, elbow={self.elbow}, wrist={self.wrist}, arm_angle={self.arm_angle:.6f})"
+
+    def __init__(self, srs_params: SRSParams):
         self.params = srs_params
         self.v_0_bs = np.array([0., 0., self.params.d_bs])
         self.v_6_wt = np.array([0., 0., self.params.d_wt])
-        self.T_oe_e = np.identity() # tcp
-        self.T_b_0b = np.identity() # user_frame
+        self.T_oe_e = np.identity(4) # tcp
+        self.T_b_0b = np.identity(4) # user_frame
 
     def set_tcp(self, tcp) -> None:
         self.T_oe_e = tcp
@@ -163,7 +168,8 @@ class SRSKinematics:
             R57 = (T56 @ T67)[:3,:3]
             R25 = R02.T @ R_d @ R57.T
             q5 = wrap_to_pi(np.arctan2(R25[2,0], R25[0,0]) - q3)
-        
+        # NOTE: 相邻两个同时奇异，或者s和w共线奇异暂时没处理
+
         qpos = np.array([q1, q2, q3, q4, q5, q6, q7])
         # Check qpos limits
         if not self._check_qps_limits(qpos):
@@ -171,6 +177,9 @@ class SRSKinematics:
         return KineStatus.OK, qpos
 
     def calc_arm_angle(self, qpos) -> tuple[KineStatus, float]:
+        if not self._check_qps_limits(qpos):
+            return KineStatus.OUT_OF_JOINT_LIMITS, None
+
         if abs(qpos[3]) < K_EPS:
             return KineStatus.OK, 0.
         
@@ -347,12 +356,12 @@ class SRSKinematics:
         q2_psi_intervals = self._calc_cos_feasible_arm_angle_intervals(As[2,2], Bs[2,2], Cs[2,2],
                                                                        self.params.lb[1], self.params.ub[1],
                                                                        cfg.shoulder)
-        q3_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(As[2.1], Bs[2,1], Cs[2,1],
+        q3_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(As[2,1], Bs[2,1], Cs[2,1],
                                                                        -As[2,0], -Bs[2,0], -Cs[2,0],
                                                                        self.params.lb[2], self.params.ub[2], 
                                                                        cfg.shoulder) 
         q5_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(Aw[2,2], Bw[2,2], Cw[2,2],
-                                                                       Aw[2.0], Bw[2,0], Cw[2,0],
+                                                                       Aw[2,0], Bw[2,0], Cw[2,0],
                                                                        self.params.lb[4], self.params.ub[4], 
                                                                        cfg.wrist) 
         q6_psi_intervals = self._calc_cos_feasible_arm_angle_intervals(-Aw[1,2], -Bw[1,2], -Cw[1,2],
@@ -362,8 +371,8 @@ class SRSKinematics:
                                                                        Aw[1,0], Bw[1,0], Cw[1,0],
                                                                        self.params.lb[6], self.params.ub[6], 
                                                                        cfg.wrist) 
-        psi_intervals = q1_psi_intervals and q2_psi_intervals and q3_psi_intervals and \
-                        q5_psi_intervals and q6_psi_intervals and q7_psi_intervals
+        psi_intervals = q1_psi_intervals & q2_psi_intervals & q3_psi_intervals & \
+                        q5_psi_intervals & q6_psi_intervals & q7_psi_intervals
         return psi_intervals
 
     def _calc_cos_joint(self, a, b, c, psi, cfg: float):
@@ -389,14 +398,14 @@ class SRSKinematics:
         q2 = self._calc_cos_joint(a, b, c, psi2, cfg)
         q_min = min(q1, q2)
         q_max = max(q1, q2)
-        lb_ = max(0., ub) if cfg > 0. else min(0., lb)
-        ub_ = max(0., lb) if cfg > 0. else min(0., ub)
+        lb_ = max(0., lb) if cfg > 0. else min(0., lb)
+        ub_ = max(0., ub) if cfg > 0. else min(0., ub)
         interval1 = Interval(q_min, q_max)
         interval2 = Interval(lb_, ub_)
         if interval1.intersect(interval2).is_empty():
             return Intervals.empty()
         if interval2.contains_interval(interval1):
-            return Intervals(Interval(-np.pi, np.pi))
+            return Intervals([Interval(-np.pi, np.pi)])
 
         split_points = [-np.pi, np.pi]
         res1 = solve_sin_cos_eq(a, b, c-np.cos(lb_))
@@ -434,7 +443,7 @@ class SRSKinematics:
             if interval1.intersect(interval2).is_empty():
                 return Intervals.empty()
 
-        def best_psi(self, q_target, psi_candidates):
+        def best_psi(q_target, psi_candidates):
             if len(psi_candidates) < 2:
                 return psi_candidates
             return min(psi_candidates, 
@@ -453,7 +462,7 @@ class SRSKinematics:
             else:
                 split_points.extend(res2[1])
 
-        def verif_func(self, psi):
+        def verif_func(psi):
             q = self._calc_tan_joint(an, bn, cn, ad, bd, cd, psi, cfg)
             return lb - K_EPS <= q <= ub + K_EPS
 
