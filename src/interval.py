@@ -113,9 +113,6 @@ class Intervals:
     def is_empty(self) -> bool:
         return not self.intervals
 
-    def length(self) -> float:
-        return sum(interval.length() for interval in self.intervals)
-
     def add(self, other: Interval | "Intervals") -> "Intervals":
         if isinstance(other, Interval):
             self.intervals = self._normalize([*self.intervals, other])

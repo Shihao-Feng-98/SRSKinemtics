@@ -130,14 +130,14 @@ class SRSKinematics:
         Bs = - (skew_v_0_sw @ skew_v_0_sw) @ R03_ref
         Cs = np.outer(uv_0_sw, uv_0_sw) @ R03_ref
         R03 = s_psi * As + c_psi * Bs + Cs
-        q1, q2, q3 = self._calc_q123(pose, cfg.shoulder, qpos_seed[0])
+        q1, q2, q3 = self._calc_q123(R03, cfg.shoulder, qpos_seed[0])
 
         # Calc wrist q5 q6 q7
         Aw = R34.T @ As.T @ R_d
         Bw = R34.T @ Bs.T @ R_d
         Cw = R34.T @ Cs.T @ R_d
         R47 = s_psi * Aw + c_psi * Bw + Cw
-        q5, q6, q7 = self._calc_q567(pose, cfg.wrist, qpos_seed[4])
+        q5, q6, q7 = self._calc_q567(R47, cfg.wrist, qpos_seed[4])
 
         # Check elbow singularity
         if abs(q4) < K_EPS:
@@ -218,8 +218,42 @@ class SRSKinematics:
         psi = sign * safe_acos(uv_ref_plane @ uv_plane)
         return KineStatus.OK, psi
 
-    def calc_feasible_arm_angle_intervals(self, pose, cfg):
-        pass
+    def calc_feasible_arm_angle_intervals(self, pose, cfg: Config) -> tuple[KineStatus, Intervals]:
+        p_d = pose[:3,3]
+        R_d = pose[:3,:3]
+        v_0_sw = p_d - self.v_0_bs - R_d @ self.v_6_wt
+        d_sw = np.linalg.norm(v_0_sw)
+
+        # q4
+        res_q4, q4 = self._calc_q4(d_sw, cfg.elbow)
+        if not res_q4:
+            return res_q4, None
+        R34 = mdh_transform(self.params.mdh[3][0], 
+                            self.params.mdh[3][1], 
+                            self.params.mdh[3][2],
+                            self.params.mdh[3][3] + q4)[:3,:3]
+        # Calc ref q1 q2 q3, when q3 = 0 and arm_angle = 0
+        q123_ref = self._calc_ref_q123(v_0_sw, d_sw, cfg.elbow)
+        T03_ref = np.eye(4)
+        for i, q in enumerate(q123_ref):
+            T03_ref = T03_ref @ mdh_transform(self.params.mdh[i][0],
+                                            self.params.mdh[i][1],
+                                            self.params.mdh[i][2],
+                                            self.params.mdh[i][3] + q)
+        R03_ref = T03_ref[:3,:3]
+
+        uv_0_sw = v_0_sw / d_sw
+        skew_v_0_sw = skew(uv_0_sw)
+        As = skew_v_0_sw @ R03_ref
+        Bs = - (skew_v_0_sw @ skew_v_0_sw) @ R03_ref
+        Cs = np.outer(uv_0_sw, uv_0_sw) @ R03_ref
+
+        Aw = R34.T @ As.T @ R_d
+        Bw = R34.T @ Bs.T @ R_d
+        Cw = R34.T @ Cs.T @ R_d
+
+        return KineStatus.OK, self._calc_feasible_arm_angle_intervals(As, Bs, Cs, Aw, Bw, Cw, cfg)
+
 
     def get_all_ik(self, pose, cfg: Config, qpos_seed):
         pass
@@ -305,6 +339,33 @@ class SRSKinematics:
         
         return q5, q6, q7
 
+    def _calc_feasible_arm_angle_intervals(self, As, Bs, Cs, Aw, Bw, Cw, cfg: Config) -> Intervals:
+        q1_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(As[1,2], Bs[1,2], Cs[1,2],
+                                                                       As[0,2], Bs[0,2], Cs[0,2],
+                                                                       self.params.lb[0], self.params.ub[0], 
+                                                                       cfg.shoulder) 
+        q2_psi_intervals = self._calc_cos_feasible_arm_angle_intervals(As[2,2], Bs[2,2], Cs[2,2],
+                                                                       self.params.lb[1], self.params.ub[1],
+                                                                       cfg.shoulder)
+        q3_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(As[2.1], Bs[2,1], Cs[2,1],
+                                                                       -As[2,0], -Bs[2,0], -Cs[2,0],
+                                                                       self.params.lb[2], self.params.ub[2], 
+                                                                       cfg.shoulder) 
+        q5_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(Aw[2,2], Bw[2,2], Cw[2,2],
+                                                                       Aw[2.0], Bw[2,0], Cw[2,0],
+                                                                       self.params.lb[4], self.params.ub[4], 
+                                                                       cfg.wrist) 
+        q6_psi_intervals = self._calc_cos_feasible_arm_angle_intervals(-Aw[1,2], -Bw[1,2], -Cw[1,2],
+                                                                       self.params.lb[5], self.params.ub[5],
+                                                                       cfg.wrist)
+        q7_psi_intervals = self._calc_tan_feasible_arm_angle_intervals(-Aw[1,1], -Bw[1,1], -Cw[1,1],
+                                                                       Aw[1,0], Bw[1,0], Cw[1,0],
+                                                                       self.params.lb[6], self.params.ub[6], 
+                                                                       cfg.wrist) 
+        psi_intervals = q1_psi_intervals and q2_psi_intervals and q3_psi_intervals and \
+                        q5_psi_intervals and q6_psi_intervals and q7_psi_intervals
+        return psi_intervals
+
     def _calc_cos_joint(self, a, b, c, psi, cfg: float):
         x = a*np.sin(psi) + b*np.cos(psi) + c
         return cfg * safe_acos(x)
@@ -314,8 +375,107 @@ class SRSKinematics:
         fd = ad*np.sin(psi) + bd* np.cos(psi) + cd
         return np.arctan2(cfg*fn, cfg*fd)
 
-    def calc_cos_feasible_arm_angle_intervals(self):
-        pass
+    def _calc_cos_feasible_arm_angle_intervals(self, a, b, c, 
+                                               lb, ub, cfg: float) -> Intervals:
+        """q2 q6 consin type
+        cos(q) = a*sin(psi) + b*cos(psi) + c
+               = sqrt(a**2 + b**2) * sin(psi + arctan(b,a)) + c
+        """
+        # stationary point
+        phi = np.arctan2(b, a)
+        psi1 = wrap_to_pi(np.pi/2 - phi)
+        psi2 = wrap_to_pi(-np.pi/2 - phi)
+        q1 = self._calc_cos_joint(a, b, c, psi1, cfg)
+        q2 = self._calc_cos_joint(a, b, c, psi2, cfg)
+        q_min = min(q1, q2)
+        q_max = max(q1, q2)
+        lb_ = max(0., ub) if cfg > 0. else min(0., lb)
+        ub_ = max(0., lb) if cfg > 0. else min(0., ub)
+        interval1 = Interval(q_min, q_max)
+        interval2 = Interval(lb_, ub_)
+        if interval1.intersect(interval2).is_empty():
+            return Intervals.empty()
+        if interval2.contains_interval(interval1):
+            return Intervals(Interval(-np.pi, np.pi))
 
-    def calc_tan_feasible_arm_angle_intervals(self):
-        pass
+        split_points = [-np.pi, np.pi]
+        res1 = solve_sin_cos_eq(a, b, c-np.cos(lb_))
+        if res1[0] == SolutionStatus.FINITE:
+            split_points.extend(res1[1])
+        res2 = solve_sin_cos_eq(a, b, c-np.cos(ub_))
+        if res2[0] == SolutionStatus.FINITE:
+            split_points.extend(res2[1])
+
+        def verif_func(self, psi):
+            q = self._calc_cos_joint(a, b, c, psi, cfg)
+            return lb - K_EPS <= q <= ub + K_EPS
+
+        return intervals_from_split_points(split_points, verif_func)
+
+    def _calc_tan_feasible_arm_angle_intervals(self, an, bn, cn, 
+                                               ad, bd, cd, 
+                                               lb, ub, cfg: float) -> Intervals:
+        split_points = [-np.pi, np.pi]
+
+        at = cfg * (bd*cn - bn*cd)
+        bt = cfg * (an*cd - ad*cn)
+        ct = cfg * (an*bd - ad*bn)
+        cond = at*at + bt*bt - ct*ct
+        if cond > K_EPS: # cyclic
+            # stationary point
+            psi1 = wrap_to_pi(2*np.arctan((at + safe_sqrt(cond))/(bt-ct))) 
+            psi2 = wrap_to_pi(2*np.arctan((at - safe_sqrt(cond))/(bt-ct)))
+            q1 = self._calc_tan_joint(an, bn, cn, ad, bd, cd, psi1, cfg)
+            q2 = self._calc_tan_joint(an, bn, cn, ad, bd, cd, psi2, cfg)
+            q_min = min(q1, q2)
+            q_max = max(q1, q2)
+            interval1 = Interval(q_min, q_max)
+            interval2 = Interval(lb, ub)
+            if interval1.intersect(interval2).is_empty():
+                return Intervals.empty()
+
+        def best_psi(self, q_target, psi_candidates):
+            if len(psi_candidates) < 2:
+                return psi_candidates
+            return min(psi_candidates, 
+                       key=lambda psi: abs(self._calc_tan_joint(an, bn, cn, ad, bd, cd, psi, cfg) - q_target))
+
+        res1 = solve_sin_cos_eq(an-ad*np.tan(lb), bn-bd*np.tan(lb), cn-cd*np.tan(lb))
+        if res1[0] == SolutionStatus.FINITE:
+            if cond < -K_EPS: # Monotonic
+                split_points.append(best_psi(lb, res1[1]))
+            else:
+                split_points.extend(res1[1])
+        res2 = solve_sin_cos_eq(an-ad*np.tan(ub), bn-bd*np.tan(ub), cn-cd*np.tan(ub))
+        if res2[0] == SolutionStatus.FINITE:
+            if cond < -K_EPS: # Monotonic
+                split_points.append(best_psi(ub, res2[1]))
+            else:
+                split_points.extend(res2[1])
+
+        def verif_func(self, psi):
+            q = self._calc_tan_joint(an, bn, cn, ad, bd, cd, psi, cfg)
+            return lb - K_EPS <= q <= ub + K_EPS
+
+        return intervals_from_split_points(split_points, verif_func)
+
+
+def intervals_from_split_points(split_points: list[float], func):
+    sorted_points = sorted(split_points)
+    unique_points: list[float] = []
+    for point in sorted_points:
+        if not unique_points or abs(point - unique_points[-1]) > K_EPS_SMALL:
+            unique_points.append(point)
+
+    if len(unique_points) < 2:
+        return Intervals.empty()
+
+    intervals: list[Interval] = []
+    lb = unique_points[0]
+    for ub in unique_points[1:]:
+        mid = 0.5 * (lb + ub)
+        if func(mid):
+            intervals.append(Interval(lb, ub))
+        lb = ub
+
+    return Intervals(intervals)
