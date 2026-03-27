@@ -91,9 +91,6 @@ if __name__ == "__main__":
     left_kine = SRSKinematics(iiwa14())
     left_kine.set_user_frame(pos_wxyz_to_homogeneous(h_base_left.position,
                                                      h_base_left.wxyz))
-    T_et_left = np.identity(4)
-    T_et_left[2,3] = 0.045
-    left_kine.set_tcp(T_et_left)
 
     # right
     frame_base_right = "/robot_base_right"
@@ -119,9 +116,6 @@ if __name__ == "__main__":
     right_kine = SRSKinematics(iiwa14())
     right_kine.set_user_frame(pos_wxyz_to_homogeneous(h_base_right.position, 
                                                       h_base_right.wxyz))
-    T_et_right = np.identity(4)
-    T_et_right[2,3] = 0.045
-    right_kine.set_tcp(T_et_right)
 
     # 身体
     sphere_positions = [(0,0,0.2),(0,0,0.4),(0,0,0.6),(0,0,0.8)]
@@ -154,7 +148,6 @@ if __name__ == "__main__":
                                                                 position=cur_right_pose[:3, 3],
                                                                 wxyz=rotation_to_wxyz(cur_right_pose[:3, :3]))
     
-
     rate = RateLimiter(frequency=100, warn=True)
     while True:
         # left
@@ -165,16 +158,15 @@ if __name__ == "__main__":
         h_left_ee_pose_text.value = f"{np.round(cur_left_pose[:3,3], 3).tolist()}," + \
                                     f"{np.round(rotation_to_wxyz(cur_left_pose[:3,:3]), 3).tolist()}"
         
-        res1, cur_left_psi = left_kine.calc_arm_angle(cur_left_qpos)
+        cur_left_psi = left_kine.calc_arm_angle(cur_left_qpos)
+        left_cfg = SRSKinematics.Config.from_qpos(cur_left_qpos, cur_left_psi)
+        res1, left_intervals = left_kine.calc_feasible_arm_angle_intervals(cur_left_pose, left_cfg)
         if res1 == KineStatus.OK:
-            left_cfg = SRSKinematics.Config.from_qpos(cur_left_qpos, cur_left_psi)
-            res2, left_intervals = left_kine.calc_feasible_arm_angle_intervals(cur_left_pose, left_cfg)
-            if res2 == KineStatus.OK:
-                for interval in left_intervals:
-                    if interval.contains(cur_left_psi):
-                        h_left_arm_angle_text.value = f"{np.round(cur_left_psi, 3)}, {interval}"
-            else:
-                h_left_arm_angle_text.value = "Error"
+            for interval in left_intervals:
+                if interval.contains(cur_left_psi):
+                    h_left_arm_angle_text.value = f"{np.round(cur_left_psi, 3)} ∈{interval}"
+        else:
+            h_left_arm_angle_text.value = "Error"
 
         goal_left_pose = pos_wxyz_to_homogeneous(h_ee_goal_left.position, 
                                                  h_ee_goal_left.wxyz)

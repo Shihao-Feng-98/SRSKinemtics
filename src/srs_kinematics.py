@@ -53,9 +53,30 @@ class iiwa14(SRSParams):
     d_bs: float = 0.36
     d_se: float = 0.42
     d_ew: float = 0.4
-    d_wt: float = 0.081
+    d_wt: float = 0.081+0.045
     lb_deg: tuple[float, ...] = (-170, -120, -170, -120, -170, -120, -175)
     ub_deg: tuple[float, ...] = (170, 120, 170, 120, 170, 120, 175)
+
+
+def intervals_from_split_points(split_points: list[float], func):
+    sorted_points = sorted(split_points)
+    unique_points: list[float] = []
+    for point in sorted_points:
+        if not unique_points or abs(point - unique_points[-1]) > K_EPS_SMALL:
+            unique_points.append(point)
+
+    if len(unique_points) < 2:
+        return Intervals.empty()
+
+    intervals: list[Interval] = []
+    lb = unique_points[0]
+    for ub in unique_points[1:]:
+        mid = 0.5 * (lb + ub)
+        if func(mid):
+            intervals.append(Interval(lb, ub))
+        lb = ub
+
+    return Intervals(intervals)
 
 
 class SRSKinematics:
@@ -94,6 +115,8 @@ class SRSKinematics:
         return self.T_b_0b
 
     def get_fk(self, qpos) -> np.ndarray:
+        # if not self._check_qps_limits(qpos):
+        #     return KineStatus.OUT_OF_JOINT_LIMITS, None
         T = np.eye(4)
         for i, q in enumerate(qpos):
             T = T @ mdh_transform(self.params.mdh[i][0],
@@ -105,7 +128,7 @@ class SRSKinematics:
 
     def get_ik(self, pose, cfg: Config, qpos_seed, verbose=True) -> tuple[KineStatus, np.ndarray]:
         pose = np.linalg.inv(self.T_b_0b) @ pose @ np.linalg.inv(self.T_oe_e)
-        
+
         s_psi = np.sin(cfg.arm_angle)
         c_psi = np.cos(cfg.arm_angle)
 
@@ -180,22 +203,22 @@ class SRSKinematics:
             return KineStatus.OUT_OF_JOINT_LIMITS, qpos
         return KineStatus.OK, qpos
 
-    def calc_arm_angle(self, qpos) -> tuple[KineStatus, float]:
-        if not self._check_qps_limits(qpos):
-            return KineStatus.OUT_OF_JOINT_LIMITS, None
+    def calc_arm_angle(self, qpos) -> float:
+        # if not self._check_qps_limits(qpos):
+        #     return KineStatus.OUT_OF_JOINT_LIMITS, None
 
         if abs(qpos[3]) < K_EPS:
-            return KineStatus.OK, 0.
+            # return KineStatus.OK, 0.
+            return 0.        
         
         pose = self.get_fk(qpos)
+        pose = np.linalg.inv(self.T_b_0b) @ pose @ np.linalg.inv(self.T_oe_e)
         cfg = SRSKinematics.Config.from_qpos(qpos)
 
         R_d = pose[:3,:3]
         p_d = pose[:3,3]
         v_26 = p_d - self.v_0_bs - R_d @ self.v_6_wt
-        uv_26 = v_26 / np.linalg.norm(v_26)
-        v_0_sw = p_d - self.v_0_bs - R_d @ self.v_6_wt
-        d_sw = np.linalg.norm(v_0_sw)
+        uv_26 = v_26 / np.linalg.norm(v_26) # arm angle axis
 
         def calc_arm_plane_normal(q1234_, uv_26_):
             T02 = None
@@ -216,9 +239,10 @@ class SRSKinematics:
             return uv_plane
 
         # Calc the normal of ref arm angle plane
-        q4 = qpos[3]
+        v_0_sw = p_d - self.v_0_bs - R_d @ self.v_6_wt
+        d_sw = np.linalg.norm(v_0_sw)
         q123_ref = self._calc_ref_q123(v_0_sw, d_sw, cfg.elbow)
-        uv_ref_plane = calc_arm_plane_normal(np.append(q123_ref, q4), uv_26)
+        uv_ref_plane = calc_arm_plane_normal(np.append(q123_ref, qpos[3]), uv_26)
 
         # Calc the normal of arm angle plane
         uv_plane = calc_arm_plane_normal(qpos[:4], uv_26)
@@ -229,8 +253,9 @@ class SRSKinematics:
             sign = np.sign(np.cross(uv_ref_plane, uv_plane) @ v_26)
 
         psi = sign * safe_acos(uv_ref_plane @ uv_plane)
-        return KineStatus.OK, psi
-
+        # return KineStatus.OK, psi
+        return psi
+    
     def calc_feasible_arm_angle_intervals(self, pose, cfg: Config, debug=False) -> tuple[KineStatus, Intervals]:
         pose = np.linalg.inv(self.T_b_0b) @ pose @ np.linalg.inv(self.T_oe_e)
 
@@ -267,14 +292,26 @@ class SRSKinematics:
         Bw = R34.T @ Bs.T @ R_d
         Cw = R34.T @ Cs.T @ R_d
 
-        return KineStatus.OK, self._calc_feasible_arm_angle_intervals(As, Bs, Cs, Aw, Bw, Cw, cfg, debug)
-
+        psi_intervals = self._calc_feasible_arm_angle_intervals(As, Bs, Cs, Aw, Bw, Cw, cfg, debug)
+        if psi_intervals.is_empty():
+            return KineStatus.UNKNOWN, psi_intervals
+        return KineStatus.OK, psi_intervals
 
     def get_all_ik(self, pose, cfg: Config, qpos_seed):
         pass
 
     def get_nearest_ik(self, pose, qpos_seed):
+        # Sample near and use closest one
         pass
+
+    def get_next_ik(self, pose, qpos_seed):
+        pre_psi = self.calc_arm_angle(qpos_seed)
+        cfg = SRSKinematics.Config.from_qpos(qpos_seed)
+        res, intervals = self.calc_feasible_arm_angle_intervals(pose, cfg)
+        if res != KineStatus.OK:
+            return res, None
+        
+
 
     def _check_qps_limits(self, qpos, verbose=True) -> bool:
         lower_violate = qpos < (self.params.lb - K_EPS)
@@ -507,23 +544,3 @@ class SRSKinematics:
 
         return intervals_from_split_points(split_points, verif_func)
 
-
-def intervals_from_split_points(split_points: list[float], func):
-    sorted_points = sorted(split_points)
-    unique_points: list[float] = []
-    for point in sorted_points:
-        if not unique_points or abs(point - unique_points[-1]) > K_EPS_SMALL:
-            unique_points.append(point)
-
-    if len(unique_points) < 2:
-        return Intervals.empty()
-
-    intervals: list[Interval] = []
-    lb = unique_points[0]
-    for ub in unique_points[1:]:
-        mid = 0.5 * (lb + ub)
-        if func(mid):
-            intervals.append(Interval(lb, ub))
-        lb = ub
-
-    return Intervals(intervals)

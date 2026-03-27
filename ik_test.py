@@ -7,10 +7,7 @@ from src.srs_kinematics import SRSKinematics, KineStatus, iiwa14
 
 
 def test_ik(kine, qpos_seed) -> bool:
-    res_psi, ref_psi = kine.calc_arm_angle(qpos_seed)
-    if res_psi != KineStatus.OK:
-        print(f"Calc arm angle failed! qpos_seed: {qpos_seed}")
-        return False
+    ref_psi = kine.calc_arm_angle(qpos_seed)
     
     pose = kine.get_fk(qpos_seed)
     srs_cfg = SRSKinematics.Config.from_qpos(qpos_seed, ref_psi)
