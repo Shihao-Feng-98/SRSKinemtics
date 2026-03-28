@@ -80,7 +80,7 @@ if __name__ == "__main__":
                             root_node_name=frame_base_left,
                             load_meshes=True,
                             load_collision_meshes=False)
-    h_robot_left.update_cfg(np.deg2rad([-45, 45, 0, 90, 0, 45, 0]))
+    h_robot_left.update_cfg(np.deg2rad([0, 75, -90, 75, 0, 30, 0]))
     frame_ee_left = f'{frame_base_left}/visual/{viser_name_from_frame(h_robot_left._urdf.scene, "iiwa_link_ee_kuka")}/frame'
     h_ee_left = vis.scene.add_frame(frame_ee_left,
                                     show_axes=True,
@@ -117,13 +117,18 @@ if __name__ == "__main__":
     right_kine.set_user_frame(pos_wxyz_to_homogeneous(h_base_right.position, 
                                                       h_base_right.wxyz))
 
-    # 身体
+    # 身体圆柱
     sphere_positions = [(0,0,0.2),(0,0,0.4),(0,0,0.6),(0,0,0.8)]
-    sphere_colors = [[150,150,150]]*len(sphere_positions)
-    h_spheres = []
+    sphere_colors = [[0,255,0]]*len(sphere_positions)
+    h_body_spheres = []
     for i, (pos, color) in enumerate(zip(sphere_positions, sphere_colors)):
-        h_sphere = vis.scene.add_icosphere(name=f"/sphere_{i}", radius=0.25, position=pos, color=color)
-        h_spheres.append(h_sphere)
+        h_sphere = vis.scene.add_icosphere(name=f"/sphere_{i}", radius=0.25, position=pos, color=color, opacity=0.5)
+        h_body_spheres.append(h_sphere)
+
+    # 肘部球
+    elbow_spere_left = f'{frame_base_left}/visual/{viser_name_from_frame(h_robot_left._urdf.scene, "iiwa_link_4")}/sphere'
+    h_elbow_sphere_left = vis.scene.add_icosphere(name=elbow_spere_left, radius=0.12, position=(0,0,0), color=(255,0,0), opacity=0.5)
+
 
     # 状态显示
     # left
@@ -142,12 +147,13 @@ if __name__ == "__main__":
     h_right_arm_angle_text = vis.gui.add_text(label="right_arm_angle(rad)", initial_value="[]")
     h_right_ee_pose_text = vis.gui.add_text(label="right_ee_pose", initial_value="[]")
 
-    cur_right_pose = right_kine.get_fk(h_robot_right._urdf.cfg.copy())
-    h_ee_goal_right = vis.scene.add_transform_controls(name="/ee_target_right",
-                                                                scale=0.2,
-                                                                position=cur_right_pose[:3, 3],
-                                                                wxyz=rotation_to_wxyz(cur_right_pose[:3, :3]))
+    # cur_right_pose = right_kine.get_fk(h_robot_right._urdf.cfg.copy())
+    # h_ee_goal_right = vis.scene.add_transform_controls(name="/ee_target_right",
+    #                                                             scale=0.2,
+    #                                                             position=cur_right_pose[:3, 3],
+    #                                                             wxyz=rotation_to_wxyz(cur_right_pose[:3, :3]))
     
+    # 实时跟踪
     rate = RateLimiter(frequency=100, warn=True)
     while True:
         # left
@@ -170,10 +176,23 @@ if __name__ == "__main__":
 
         goal_left_pose = pos_wxyz_to_homogeneous(h_ee_goal_left.position, 
                                                  h_ee_goal_left.wxyz)
-        res, left_qpos = left_kine.get_ik(goal_left_pose, left_cfg, cur_left_qpos)
+        
+        # # 指定cfg、指定psi的IK
+        # res, left_qpos = left_kine.get_ik(goal_left_pose, left_cfg, cur_left_qpos)
+
+        # # 指定cfg、不指定psi的IK2
+        # res, goal_left_qpos = left_kine.get_nearest_ik(goal_left_pose, cur_left_qpos, False)
+
+        # 指定cfg、不指定psi的IK
+        res, goal_left_qpos = left_kine.get_next_ik(goal_left_pose, cur_left_qpos, False)
+
         if res == KineStatus.OK:
-            h_robot_left.update_cfg(left_qpos)
-
-        # right
-
+            if not np.allclose(goal_left_qpos, cur_left_qpos, atol=np.deg2rad(90)):
+                print("Warning: IK solution discontinuous!" + \
+                      f"cur_left_qpos={np.round(cur_left_qpos, 3)}, goal_left_qpos={np.round(goal_left_qpos, 3)}")
+            h_robot_left.update_cfg(goal_left_qpos)
+        
         rate.sleep()    
+
+
+    # MoveLine跟踪

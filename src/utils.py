@@ -26,7 +26,6 @@ def skew(vec) -> np.ndarray:
                     [vec[2], 0., -vec[0]],
                     [-vec[1], vec[0], 0.]])
 
-
 def wrap_to_pi(q):
     if q < -np.pi:
         return q + 2*np.pi
@@ -42,6 +41,13 @@ def safe_acos(x):
 
 def safe_asin(x):
     return np.arcsin(np.clip(x, -1.0, 1.0))
+
+def weighted_norm(vec: np.ndarray, weights=None):
+    if weights is None:
+        weights = np.eye(vec.shape[0])
+    if weights.shape == vec.shape:
+        weights = np.diag(weights)
+    return np.sqrt(vec.T @ weights @ vec)
 
 
 class SolutionStatus(Enum):

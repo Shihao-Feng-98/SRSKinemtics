@@ -139,7 +139,7 @@ class SRSKinematics:
 
         # q4
         res_q4, q4 = self._calc_q4(d_sw, cfg.elbow)
-        if not res_q4:
+        if res_q4 != KineStatus.OK:
             return res_q4, None
         R34 = mdh_transform(self.params.mdh[3][0], 
                             self.params.mdh[3][1], 
@@ -300,18 +300,92 @@ class SRSKinematics:
     def get_all_ik(self, pose, cfg: Config, qpos_seed):
         pass
 
-    def get_nearest_ik(self, pose, qpos_seed):
-        # Sample near and use closest one
-        pass
+    def get_nearest_ik(self, pose, qpos_seed, verbose=True):
+        """问题：缺少连续性cost"""
+        def distance_cost(qpos, qpos_ref, qpos_lb, qpos_ub):
+            """问题：q4和pose是一一对应的，q4的weight应该去掉"""
+            vec = (qpos - qpos_ref) / (qpos_ub - qpos_lb)
+            return weighted_norm(np.abs(vec), np.array([2,2,2,1,1,1,1]))
 
-    def get_next_ik(self, pose, qpos_seed):
-        pre_psi = self.calc_arm_angle(qpos_seed)
+        def limit_cost(qpos, qpos_lb, qpos_ub, penalty_bound=0.95):
+            """问题：q4和pose是一一对应的，q4的weight应该去掉
+                    惩罚函数不连续，指数增长过快
+            """
+            qpos_mid = 0.5 * (qpos_lb + qpos_ub)
+            qpos_range = qpos_ub - qpos_lb
+            temp = (qpos - qpos_mid) / qpos_range / 2.0
+            vec = 0.1*temp if np.any(temp <= penalty_bound) else np.exp(10.0*(temp - penalty_bound))
+            return weighted_norm(np.abs(vec), np.array([2,2,2,1,1,1,1]))
+
+        def singularity_cost(qpos, penalty_bound=np.deg2rad(5.0)):
+            """问题：惩罚函数不连续，应该采用jacobian来评估奇异"""
+            cost = 0.0
+            if (abs(qpos[1]) < penalty_bound):
+                cost += 10.0
+            if (abs(qpos[5]) < penalty_bound):
+                cost += 5.0
+            return cost
+
+        def elbow_collision_cost(qpos):
+            T = np.eye(4)
+            for i, q in enumerate(qpos[:4]):
+                T = T @ mdh_transform(self.params.mdh[i][0],
+                                    self.params.mdh[i][1],
+                                    self.params.mdh[i][2],
+                                    self.params.mdh[i][3] + q)
+            elbow_pos = T[:3,3]
+            dist = np.hypot(elbow_pos[1], elbow_pos[2])
+            return np.exp(-1.0*(dist-0.25-0.12)) # 身体半径+elbow半径
+
+        psi_pre = self.calc_arm_angle(qpos_seed)
         cfg = SRSKinematics.Config.from_qpos(qpos_seed)
+        
+        res_final = None
+        psi_sample_list = psi_pre + np.deg2rad(np.linspace(-5, 5, 11))
+        candidates = []
+        for psi in psi_sample_list:
+            cfg.arm_angle = psi
+            res, qpos = self.get_ik(pose, cfg, qpos_seed, False)
+            if res != KineStatus.OK:
+                res_final = res
+                continue
+            cost = distance_cost(qpos, qpos_seed, self.params.lb, self.params.ub) + \
+                   limit_cost(qpos, self.params.lb, self.params.ub) + \
+                   singularity_cost(qpos) + \
+                   elbow_collision_cost(qpos)
+            candidates.append((qpos, cost))
+        if not candidates:
+            return res_final, None
+        candidates.sort(key=lambda x: x[1])
+        return KineStatus.OK, candidates[0][0]
+
+    def get_next_ik(self, pose, qpos_seed, verbose=True):
+        """行为像是先找到最好的psi，然后逐步趋向于最好的；K和alpha就是调节这个逐步的过程"""
+        def get_next_psi(psi_pre, psi_lb, psi_ub, K=0.5, alpha=15.0):
+            psi_range = psi_ub - psi_lb
+            temp1 = (psi_pre - psi_lb) / psi_range
+            temp2 = (psi_ub - psi_pre) / psi_range
+            delta = K * 0.5 * psi_range * (np.exp(-alpha*temp1) - np.exp(-alpha*temp2))
+            return psi_pre + delta
+
+        psi_pre = self.calc_arm_angle(qpos_seed)
+        cfg = SRSKinematics.Config.from_qpos(qpos_seed)
+
         res, intervals = self.calc_feasible_arm_angle_intervals(pose, cfg)
         if res != KineStatus.OK:
             return res, None
         
+        candidate_intervel = None
+        for interval in intervals:
+            if interval.contains(psi_pre):
+                candidate_intervel = interval
+                break
+        if candidate_intervel is None:
+            # TODO：选择最靠近的interval，然后取中值
+            return KineStatus.UNKNOWN, None
 
+        cfg.arm_angle = get_next_psi(psi_pre, candidate_intervel.lb, candidate_intervel.ub)
+        return self.get_ik(pose, cfg, qpos_seed, verbose)
 
     def _check_qps_limits(self, qpos, verbose=True) -> bool:
         lower_violate = qpos < (self.params.lb - K_EPS)
@@ -321,8 +395,8 @@ class SRSKinematics:
             idxs = np.where(lower_violate | upper_violate)[0]
             for idx in idxs:
                 if verbose:
-                    print(f"q{idx+1} {qpos[idx]} out of limit," + 
-                        f"lb:{self.params.lb[idx]}, ub:{self.params.ub[idx]})")
+                    print(f"q{idx+1} {qpos[idx]:.4f} out of limit," + 
+                        f"lb:{self.params.lb[idx]:.4f}, ub:{self.params.ub[idx]:.4f})")
             return False    
         return True        
 
