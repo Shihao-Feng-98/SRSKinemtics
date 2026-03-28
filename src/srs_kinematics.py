@@ -362,6 +362,9 @@ class SRSKinematics:
     def get_next_ik(self, pose, qpos_seed, verbose=True):
         """行为像是先找到最好的psi，然后逐步趋向于最好的；K和alpha就是调节这个逐步的过程"""
         def get_next_psi(psi_pre, psi_lb, psi_ub, K=0.5, alpha=15.0):
+            """
+            K步长增益 alpha指数衰减因子
+            """
             psi_range = psi_ub - psi_lb
             temp1 = (psi_pre - psi_lb) / psi_range
             temp2 = (psi_ub - psi_pre) / psi_range

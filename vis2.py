@@ -7,6 +7,7 @@ from trimesh.scene import Scene
 import viser
 from viser.extras import ViserUrdf
 
+import matplotlib.pyplot as plt
 import time
 from src.srs_kinematics import SRSKinematics, KineStatus, iiwa14
 
@@ -150,14 +151,15 @@ if __name__ == "__main__":
     h_arm_angle_text_2 = vis.gui.add_text(label="arm_angle_2(rad)", initial_value="[]")
     h_ee_pose_text_2 = vis.gui.add_text(label="ee_pose_2", initial_value="[]")
 
-
-    # embed(banner1="Start")
+    embed(banner1="Start")
     # 实时跟踪
+    qpos1_array = []
+    qpos2_array = []
     rate = RateLimiter(frequency=50, warn=True)
     t0 = time.time()
     pre_goal = pos_wxyz_to_homogeneous(h_ee_goal_1.position, 
                                         h_ee_goal_1.wxyz)
-    while time.time() - t0 < 60:
+    while time.time() - t0 < 30:
         # robot 1
         cur_qpos_1 = h_robot_1._urdf.cfg.copy()
         h_qpos_text_1.value = f"{np.round(cur_qpos_1, 3).tolist()}"
@@ -194,7 +196,8 @@ if __name__ == "__main__":
         else:
             h_arm_angle_text_2.value = "Error"
 
-
+        qpos1_array.append(cur_qpos_1)
+        qpos2_array.append(cur_qpos_2)
 
         goal_pose_1 = pos_wxyz_to_homogeneous(h_ee_goal_1.position, 
                                                 h_ee_goal_1.wxyz)
@@ -220,3 +223,29 @@ if __name__ == "__main__":
         rate.sleep()  
 
     # 绘制曲线图
+    near_limits1 = []
+    for qpos in qpos1_array:
+        temp = []
+        for q, lb, ub in zip(qpos, kine.params.lb, kine.params.ub):
+            near_limit = min(abs(q - lb), abs(ub - q))/(ub-lb)
+            temp.append(near_limit)
+        near_limits1.append(np.min(temp))
+
+    near_limits2 = []
+    for qpos in qpos2_array:
+        temp = []
+        for q, lb, ub in zip(qpos, kine.params.lb, kine.params.ub):
+            near_limit = min(abs(q - lb), abs(ub - q))/(ub-lb)
+            temp.append(near_limit)
+        near_limits2.append(np.min(temp))
+
+    t = 1/50 * np.arange(0, len(near_limits1))
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(t, near_limits1, "b-", label="GetNextIK")
+    plt.plot(t, near_limits2, "r--", label="GetNearestIK")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Minimum Normalized Distance to Joint Limits")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
