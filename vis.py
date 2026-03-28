@@ -7,7 +7,6 @@ from trimesh.scene import Scene
 import viser
 from viser.extras import ViserUrdf
 
-from src.interval import Interval
 from src.srs_kinematics import SRSKinematics, KineStatus, iiwa14
 
 
